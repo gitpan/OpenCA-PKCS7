@@ -49,9 +49,12 @@
 ## copied and put under another distribution licence
 ## [including the GNU Public Licence.]
 ##
+
+use strict;
+
 package OpenCA::PKCS7;
 
-$VERSION = '0.1.23';
+$OpenCA::PKCS7::VERSION = '0.3.0a';
 
 my %params = (
 	 inFile => undef,
@@ -119,7 +122,7 @@ sub getSigner {
 	my $self = shift;
 
 	my $keys = { @_ };
-	my $tmp;
+	my ( $tmp, $ret );
 	
 	if ( $self->{inFile} ) {
 		$tmp=$self->{backend}->verify( SIGNATURE_FILE=>$self->{inFile},
@@ -133,7 +136,7 @@ sub getSigner {
 					       VERBOSE=>1 );
 	};
 
-	if ( not $ret = $self->parseDepth( DEPTH=>0, DATA=>$tmp ) ) {
+	if ( not $ret = $self->parseDepth( DEPTH=>"0", DATA=>$tmp ) ) {
 		return;
 	}
 
@@ -144,8 +147,8 @@ sub verifyChain {
 	my $self = shift;
 
 	my $keys = { @_ };
-	my $tmp;
-	
+	my ( $tmp, $ret );
+
 	if ( $self->{inFile} ) {
 		$tmp=$self->{backend}->verify( SIGNATURE_FILE=>$self->{inFile},
 					       DATA_FILE=>$self->{dataFile},
@@ -162,7 +165,7 @@ sub verifyChain {
 
 	## return if ( $? != 0 );
 
-	if ( not $ret = $self->parseDepth( DEPTH=>0, DATA=>$tmp ) ) {
+	if ( not $ret = $self->parseDepth( DEPTH=>"0", DATA=>$tmp ) ) {
 		return;
 	}
 
@@ -177,10 +180,10 @@ sub parseDepth {
 	my $depth = $keys->{DEPTH};
 	my $data  = $keys->{DATA};
 	my @dnList = ();
+	my @ouList = ();
 
-	my $serial, $dn, $email, $cn, @ou, $o, $c;
-	my $currentDepth, $tmp, $line;
-	my $ret;
+	my ( $serial, $dn, $email, $cn, @ou, $o, $c );
+	my ( $currentDepth, $tmp, $line, $ret );
 	
 	return if (not $data);
 
