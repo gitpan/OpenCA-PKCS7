@@ -5,32 +5,44 @@ $|=1;
 use OpenCA::OpenSSL;
 use OpenCA::PKCS7;
 
+## my $baseName = "27253";
+## my $caDir = "/usr/local/OpenCA/chain";
+my $baseName = "TEXT";
+my $caDir = "chain";
+
 my $openssl = new OpenCA::OpenSSL( SHELL=>"/usr/bin/openssl" );
 $openssl->setParams ( CONFIG=>"/usr/ssl/openssl.cnf",
-		      VERIFY=>"/usr/bin/verify",
-		      SIGN=>"/usr/bin/sign" );
+		      VERIFY=>"/usr/local/bin/verify",
+		      SIGN=>"/usr/local/bin/sign" );
 
 ## $openssl->setParams ( STDERR => "/dev/null" );
 
 my $signature = new OpenCA::PKCS7( SHELL=>$openssl,
-				   INFILE=>"TEXT.sig",
-				   DATAFILE=>"TEXT",
-				   CA_CERT=>"cacert.pem",
-				   CA_DIR=>"chain");
+				   INFILE=>"$baseName.sig",
+				   DATAFILE=>"$baseName",
+				   ## CA_CERT=>"cacert.pem",
+				   CA_DIR=>$caDir);
 
 if ( not $signature ) {
 	print "Error\n";
 	exit;
 }
 
-my $info =  $signature->getSigner();
-my $info =  $signature->verifyChain();
+my $parsed =  $signature->getParsed();
+my $signer =  $signature->getSigner();
+
+print "Signature Error Number : " . $signature->status . "\n";
+print "Signature Error Value  : " . $signature->errval . "\n";
+
+print "Signer:\n    C-Name: $signer->{CN}\n    Serial: $signer->{SERIAL}\n\n";
+
+my $info = $parsed->{CHAIN};
 
 foreach $level ( keys %$info ) {
 	print "Depth: $level\n";
-	print "    Serial: " . $info->{0}->{SERIAL} . "\n";
-	print "    E-Mail: " . $info->{0}->{EMAIL} . "\n";
-	print "    C-Name: " . $info->{0}->{CN} . "\n";
+	print "    Serial: " . $info->{$level}->{SERIAL} . "\n";
+	print "    E-Mail: " . $info->{$level}->{EMAIL} . "\n";
+	print "    C-Name: " . $info->{$level}->{CN} . "\n";
 	print "\n";
 };
 

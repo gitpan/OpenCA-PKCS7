@@ -54,7 +54,7 @@ use strict;
 
 package OpenCA::PKCS7;
 
-$OpenCA::PKCS7::VERSION = '0.3.0a';
+$OpenCA::PKCS7::VERSION = '0.4.21a';
 
 my %params = (
 	 inFile => undef,
@@ -62,9 +62,12 @@ my %params = (
 	 dataFile => undef,
 	 caCert => undef,
 	 caDir => undef,
-	 signer => undef,
+	 parsed => undef,
 	 context => undef,
 	 backend => undef,
+	 errno => undef,
+	 errval => undef,
+	 status => undef
 );
 
 ## Create an instance of the Class
@@ -81,18 +84,17 @@ sub new {
 	my $keys = { @_ };
 	my $tmp;
 
-        $self->{datafile}   = $keys->{DATAFILE};
-        $self->{signature}  = $keys->{SIGNATURE};
-
         $self->{caCert}     = $keys->{CA_CERT};
         $self->{caDir}      = $keys->{CA_DIR};
+
         $self->{dataFile}   = $keys->{DATAFILE};
+        $self->{signature}  = $keys->{SIGNATURE};
 
 	$self->{inFile}	    = $keys->{INFILE};
 
 	$self->{backend}    = $keys->{SHELL};
 
-	if( $self->{inFile} ) {
+	if( ($self->{inFile}) and ( -e "$self->{inFile}") ) {
 		$self->{signature} = "";
 
 		open(FD, "<$self->{inFile}" ) or return;
@@ -100,7 +102,6 @@ sub new {
 			$self->{signature} .= $tmp;
 		}
 		close(FD);
-
 	};
 
 	return if (not $self->initSignature() );
@@ -115,7 +116,71 @@ sub initSignature {
 
 	return if ( (not $self->{inFile}) and ( not $self->{signature}));
 
-	return 1;
+	if( $self->getParsed() ) {
+		return 1;
+	} else {
+		return;
+	}
+}
+
+sub getParsed {
+	my $self = shift;
+	my $keys = { @_ };
+
+	my ( $ret, $tmp );
+
+	$tmp = $self->{backend}->verify( SIGNATURE=>$self->{signature},
+			DATA_FILE=>$self->{dataFile},
+			CA_CERT=>$self->{caCert},
+			CA_DIR=>$self->{caDir},
+			NOCHAIN=>1,
+			VERBOSE=>1 );
+
+	$self->{errno} = $self->{backend}->errno;
+	$self->{errval} = $self->{backend}->errval;
+
+        if ( not $ret = $self->parseDepth( DEPTH=>"0", DATA=>$tmp ) ) {
+                return;
+        }
+
+	$self->{parsed}->{SIGNER} = $ret->{0};
+
+	$tmp = $self->{backend}->verify( SIGNATURE=>$self->{signature},
+			DATA_FILE=>$self->{dataFile},
+			CA_CERT=>$self->{caCert},
+			CA_DIR=>$self->{caDir},
+			VERBOSE=>1 );
+
+	$self->{status} = $self->{backend}->{errno};
+
+        if ( ( $tmp ) and ( $ret = $self->parseDepth( DATA=>$tmp )) ) {
+		$self->{parsed}->{CHAIN} = $ret;
+        }
+
+	$self->{parsed}->{SIGNER}->{CERTIFICATE} = 
+		$self->{backend}->pkcs7Certs( PKCS7=>$self->{signature});
+
+	$self->{parsed}->{SIGNATURE} = $self->{signature};
+
+	return $self->{parsed};
+}
+
+sub errno {
+        my $self = shift;
+
+        return $self->{errno};
+}
+
+sub errval {
+        my $self = shift;
+
+        return $self->{errval};
+}
+
+sub status {
+        my $self = shift;
+
+        return $self->{status};
 }
 
 sub getSigner {
@@ -123,24 +188,9 @@ sub getSigner {
 
 	my $keys = { @_ };
 	my ( $tmp, $ret );
-	
-	if ( $self->{inFile} ) {
-		$tmp=$self->{backend}->verify( SIGNATURE_FILE=>$self->{inFile},
-					       NOCHAIN=>1,
-					       DATA_FILE=>$self->{dataFile},
-					       VERBOSE=>1 );
-	} else {
-		$tmp=$self->{backend}->verify( SIGNATURE=>$self->{signature},
-					       NOCHAIN=>1,
-					       DATA_FILE=>$self->{dataFile},
-					       VERBOSE=>1 );
-	};
 
-	if ( not $ret = $self->parseDepth( DEPTH=>"0", DATA=>$tmp ) ) {
-		return;
-	}
-
-	return $ret;
+	return if( not $self->{parsed} );
+	return $self->{parsed}->{SIGNER};
 }
 
 sub verifyChain {
@@ -163,7 +213,8 @@ sub verifyChain {
 					       VERBOSE=>1 );
 	};
 
-	## return if ( $? != 0 );
+	## Returns if signature is not valid (verify returned an error)
+	return if( $? != 0 );
 
 	if ( not $ret = $self->parseDepth( DEPTH=>"0", DATA=>$tmp ) ) {
 		return;
@@ -195,18 +246,17 @@ sub parseDepth {
 
 		if ( $line =~ /Serial Number:/ ) {
         		( $ret->{$currentDepth}->{SERIAL} ) = 
-				( $line =~ /Serial Number:[^x]*.([^\)]+)/i);
+				( $line =~ /Serial Number\s*:\s*([\S]+)/i);
 
 			if ( length( $ret->{$currentDepth}->{SERIAL}) % 2 ) {
 				$ret->{$currentDepth}->{SERIAL} = 
 					"0" . $ret->{$currentDepth}->{SERIAL};
 			}
-
 		}
 
 		if ( $line =~ /Subject:/ ) {
         		( $ret->{$currentDepth}->{DN} ) = 
-				( $line =~ /Subject: ([^\n]+)/i );
+				( $line =~ /Subject: \/*([^\n]+)/i );
 
 			## Split the Subject into separate fields
 			@dnList = split( /[\,\/]+/, $dn );
@@ -233,6 +283,9 @@ sub parseDepth {
 
 			$ret->{$currentDepth}->{OU} = [ @ouList ];
 
+		       	( $ret->{$currentDepth}->{S} ) =
+				( $dn =~ /S=([^\,^\/]+)/i );
+
 		       	( $ret->{$currentDepth}->{L} ) =
 				( $dn =~ /L=([^\,^\/]+)/i );
 
@@ -252,6 +305,14 @@ sub getSignature {
 
 	return if( not $self->{signature} );
 	return $self->{signature};
+}
+
+sub getSignerCert {
+	my $self = shift;
+
+	my $keys = { @_ };
+
+
 }
 
 # Autoload methods go after =cut, and are processed by the autosplit program.
@@ -304,10 +365,37 @@ for this).
 
 	EXAMPLE:
 
-	      $x509 = new OpenCA::PKCS#7( SHELL=>$crypto,
+	      $sig = new OpenCA::PKCS#7(  SHELL=>$crypto,
 					  INFILE=>"TEXT.sig",
 					  DATA=>"TEXT",
 					  CACERT=>"/OpenCA/cacert.pem");
+
+=head2 sub errno () - Get last command errno value.
+
+        This functions returns last operation's errno value. Non
+        zero value means there has been an error.
+
+        EXAMPLE:
+
+                print $sig->errno;
+
+=head2 sub errval () - Get last command errval value.
+
+        This functions returns last operation's errval value. This
+        value usually has a brief error description.
+
+        EXAMPLE:
+
+                print $sig->errval;
+
+=head2 sub status () - Get signature status.
+
+        This functions returns signature validity status. Non
+	zero values usually means an error occurred.
+
+        EXAMPLE:
+
+                print "ERROR" if ( $sig->status );
 
 =head2 sub getSigner () - Get basic Signer Infos.
 
