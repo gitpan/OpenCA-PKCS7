@@ -10,15 +10,15 @@ use OpenCA::PKCS7;
 my $baseName = "TEXT";
 my $caDir = "chain";
 
-my $openssl = new OpenCA::OpenSSL( SHELL=>"/usr/bin/openssl" );
+my $openssl = new OpenCA::OpenSSL( SHELL=>"/usr/local/bin/openssl" );
 $openssl->setParams ( CONFIG=>"/usr/ssl/openssl.cnf",
-		      VERIFY=>"/usr/local/bin/verify",
-		      SIGN=>"/usr/local/bin/sign" );
+		      VERIFY=>"/usr/local/bin/openca-verify",
+		      SIGN=>"/usr/local/bin/openca-sign" );
 
 ## $openssl->setParams ( STDERR => "/dev/null" );
 
 my $signature = new OpenCA::PKCS7( SHELL=>$openssl,
-				   INFILE=>"$baseName.sig",
+				   INFILE=>"${baseName}.sig",
 				   DATAFILE=>"$baseName",
 				   ## CA_CERT=>"cacert.pem",
 				   CA_DIR=>$caDir);

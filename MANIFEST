@@ -4,7 +4,6 @@ MANIFEST
 test.pl
 PKCS7.pm
 LICENSE
-test/test.old
 test/pkcs7_test.pl
 test/TEXT
 test/TEXT.sig
