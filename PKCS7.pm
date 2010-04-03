@@ -9,7 +9,7 @@
 ## lhash, DES, etc., code; not just the SSL code.  The documentation
 ## included with this distribution is covered by the same copyright terms
 ## 
-## Copyright remains Massimiliano Pala's, and as such any Copyright notices
+## // Copyright remains Massimiliano Pala's, and as such any Copyright notices
 ## in the code are not to be removed.
 ## If this package is used in a product, Massimiliano Pala should be given
 ## attribution as the author of the parts of the library used.
@@ -26,8 +26,8 @@
 ##    documentation and/or other materials provided with the distribution.
 ## 3. All advertising materials mentioning features or use of this software
 ##    must display the following acknowledgement:
-##    "This product includes OpenCA software written by Massimiliano Pala
-##     (madwolf@openca.org) and the OpenCA Group (www.openca.org)"
+## //   "This product includes OpenCA software written by Massimiliano Pala
+## //    (madwolf@openca.org) and the OpenCA Group (www.openca.org)"
 ## 4. If you include any Windows specific code (or a derivative thereof) from 
 ##    some directory (application code) you must include an acknowledgement:
 ##    "This product includes OpenCA software (www.openca.org)"
@@ -50,7 +50,7 @@
 ## [including the GNU Public Licence.]
 ##
 
-## the module's errorcode is 79
+## // the module's errorcode is 79
 ##
 ## functions
 ##
@@ -63,13 +63,14 @@
 ## getSignature		23
 
 use strict;
+use Carp qw(cluck);
 use X500::DN;
 
 package OpenCA::PKCS7;
 
 our ($errno, $errval);
 
-($OpenCA::PKCS7::VERSION = '$Revision: 1.13 $' )=~ s/(?:^.*: (\d+))|(?:\s+\$$)/defined $1?"0\.9":""/eg;
+($OpenCA::PKCS7::VERSION = '$Revision: 1.1.1.1 $' )=~ s/(?:^.*: (\d+))|(?:\s+\$$)/defined $1?"0\.9":""/eg;
 
 my %params = (
 	 inFile => undef,
@@ -81,7 +82,11 @@ my %params = (
 	 context => undef,
 	 backend => undef,
 	 status => undef,
+	 statusStack => [],
 	 nochain => undef,
+         opaquesig => undef,
+         ignoreErrors => undef,
+         ignoreErrorsHash => undef,
 );
 
 sub setError {
@@ -89,15 +94,29 @@ sub setError {
 
 	if (scalar (@_) == 4) {
 		my $keys = { @_ };
-		$errval = $keys->{ERRVAL};
-		$errno  = $keys->{ERRNO};
+		$self->{errno}  = $keys->{ERRNO};
+		$self->{errval} = $keys->{ERRVAL};
 	} else {
-		$errno  = $_[0];
-		$errval = $_[1];
+		$self->{errno}  = $_[0];
+		$self->{errval} = $_[1];
 	}
+	$errno  = $self->{errno};
+	$errval = $self->{errval};
 
 	## support for: return $self->setError (1234, "Something fails.") if (not $xyz);
 	return undef;
+}
+
+sub errno
+{
+    my $self = shift;
+    return $self->{errno};
+}
+
+sub errval
+{
+    my $self = shift;
+    return $self->{errval};
 }
 
 ## Create an instance of the Class
@@ -114,6 +133,10 @@ sub new {
 	my $keys = { @_ };
 	my $tmp;
 
+	$self->{gettext}    = $keys->{GETTEXT};
+	return $self->setError (7911020, "OpenCA::PKCS7->new: The translation function must be specified.")
+            if (not $self->{gettext});
+
         $self->{caCert}     = $keys->{CA_CERT};
         $self->{caDir}      = $keys->{CA_DIR};
 
@@ -126,13 +149,41 @@ sub new {
 	$self->{backend}    = $keys->{SHELL};
 
 	$self->{nochain}    = $keys->{NOCHAIN};
+	$self->{opaquesig}  = $keys->{OPAQUESIGNATURE};
+
+	$self->{ignoreErrors} = $keys->{IGNOREERRORS};
+
+
+	# you can explicitly exclude certain error codes from being
+	# returned. to use this features, call the constructor with the
+	# error(s) to exclude:
+	#
+	# my $sig = new OpenCA::PKCS7(..., IGNOREERRORS => 26, ...)
+	#
+	# or to exclude more than one error:
+	# my $sig = new OpenCA::PKCS7(..., IGNOREERRORS => [26, 18], ...)
+	#
+
+	# convert to arrayref if a scalar was passed in
+	if (defined $self->{ignoreErrors} and not ref($self->{ignoreErrors})) {
+	    $self->{ignoreErrors} = [ $self->{ignoreErrors} ];
+	}
+	$self->{ignoreErrors} = [] unless defined $self->{ignoreErrors};
+
+	# nochain: ignore errors on selfsigned certs and incorrect key usage
+	push(@{$self->{ignoreErrors}}, (18, 26)) if (exists $self->{nochain} and $self->{nochain});
+
+	# create hash from the list of errors to ignore
+	$self->{ignoreErrorsHash} = { map { $_, 1 } @{$self->{ignoreErrors}}};
+	
 
 	if( ($self->{inFile}) and ( -e "$self->{inFile}") ) {
 		$self->{signature} = "";
 
 		open(FD, "<$self->{inFile}" )
-			or return $self->setError (7911021, "OpenCA::PKCS7->new: Cannot open infile ".
-						$self->{inFile}." for reading.");
+			or return $self->setError (7911021,
+                                      $self->{gettext} ("OpenCA::PKCS7->new: Cannot open infile __FILENAME__ for reading.",
+                                                        "__FILENAME__", $self->{inFile}));
 		while ( $tmp = <FD> ) {
 			$self->{signature} .= $tmp;
 		}
@@ -143,27 +194,32 @@ sub new {
 		$self->{data} = "";
 
 		open(FD, "<$self->{dataFile}" )
-			or return $self->setError (7911023, "OpenCA::PKCS7->new: Cannot open datafile ".
-						$self->{dataFile}." for reading.");
+			or return $self->setError (7911023,
+                                      $self->{gettext} ("OpenCA::PKCS7->new: Cannot open datafile __FILENAME__ for reading.",
+                                                        "__FILENAME__", $self->{dataFile}));
 		while ( $tmp = <FD> ) {
 			$self->{data} .= $tmp;
 		}
 		close(FD);
 	};
 
-        if (not $self->{data} and $self->{inFile} and ( -e "$self->{inFile}")) {
+        if (not $self->{opaquesig} and not $self->{data} and $self->{inFile} and ( -e "$self->{inFile}")) {
 		$self->{data} = "";
 
 		open(FD, "<$self->{inFile}" )
-			or return $self->setError (7911025, "OpenCA::PKCS7->new: Cannot open infile ".
-						$self->{inFile}." for reading.");
+			or return $self->setError (7911025,
+                                      $self->{gettext} ("OpenCA::PKCS7->new: Cannot open infile __FILENAME__ for reading.",
+                                                        "__FILENAME__", $self->{inFile}));
 		while ( $tmp = <FD> ) {
 			$self->{data} .= $tmp;
 		}
 		close(FD);
 	};
 
-	return $self->setError (7911031, "OpenCA::PKCS7->new: Cannot initialize signature ($errno)\n$errval")
+	return $self->setError (7911031,
+                   $self->{gettext} ("OpenCA::PKCS7->new: Cannot initialize signature (__ERRNO__). __ERRVAL__",
+                                     "__ERRNO__", $self->errno,
+                                     "__ERRVAL__", $self->errval))
 		if (not $self->initSignature() );
 
         return $self;
@@ -174,15 +230,20 @@ sub initSignature {
 	my $keys = { @_ };
 	my $tmp;
 
-	return $self->setError (7912011, "OpenCA::PKCS7->initSignature: No signature specified.")
+	return $self->setError (7912011,
+                   $self->{gettext} ("OpenCA::PKCS7->initSignature: No signature specified."))
 		if (not $self->{signature});
-	return $self->setError (7912012, "OpenCA::PKCS7->initSignature: No data specified.")
-		if (not $self->{data});
+	return $self->setError (7912012,
+                   $self->{gettext} ("OpenCA::PKCS7->initSignature: No data specified."))
+		if (not $self->{data} and (not $self->{opaquesig}));
 
 	if( $self->getParsed() ) {
 		return 1;
 	} else {
-		return $self->setError (7912021, "OpenCA::PKCS7->initSignature: Cannot parse signature ($errno)\n$errval.")
+		return $self->setError (7912021,
+                           $self->{gettext} ("OpenCA::PKCS7->initSignature: Cannot parse signature (__ERRNO__). __ERRVAL__",
+                                             "__ERRNO__", $self->errno,
+                                             "__ERRVAL__", $self->errval))
 	}
 }
 
@@ -193,29 +254,45 @@ sub getParsed {
 	my ( $ret, $tmp );
 
 	$tmp = $self->{backend}->verify( SIGNATURE=>$self->{signature},
+			OPAQUESIGNATURE => $self->{opaquesig},
 			## old: DATA_FILE=>$self->{dataFile},
 			DATA    => $self->{data},
 			CA_CERT => $self->{caCert},
 			CA_DIR  => $self->{caDir},
-			VERBOSE => 1,
-			NOCHAIN => $self->{nochain} );
+			VERBOSE => 1);
+	print "OpenCA::PKCS7->getParsed: OpenCA::OpenSSL->verify returns:<br>\n".
+	      $tmp."<br>\n"
+		if ($self->{DEBUG});
 
 	## why should verify the signature twice?
 	#$tmp = $self->{backend}->verify( SIGNATURE=>$self->{signature},
+	#		OPAQUESIGNATURE => $self->{opaquesig},
 	#		DATA_FILE=>$self->{dataFile},
 	#		NOCHAIN=>1,
 	#		VERBOSE=>1 );
 
 	if (not $tmp) {
-		$self->{status} = $OpenCA::OpenSSL::errno;
-		return $self->setError (7921021, "OpenCA::PKCS7->getParsed: The crypto-backend cannot verify the signature ".
-				"(".$OpenCA::OpenSSL::errno.")\n".$OpenCA::OpenSSL::errval);
+	    if (not $self->{ignoreErrorsHash}->{$OpenCA::OpenSSL::errno}) {
+		$self->setstatus($OpenCA::OpenSSL::errno);
+
+		return $self->setError (7921021,
+                           $self->{gettext} ("OpenCA::PKCS7->getParsed: The crypto-backend cannot verify the signature (__ERRNO__). __ERRVAL__",
+                                             "__ERRNO__", $OpenCA::OpenSSL::errno,
+                                             "__ERRVAL__", $OpenCA::OpenSSL::errval));
+	    }
 	}
 
 
 	if ( not $ret = $self->parseDepth( DEPTH=>"0", DATA=>$tmp ) ) {
-		$self->{status} = $OpenCA::OpenSSL::errno;
-		return $self->setError (7921031, "OpenCA::PKCS7->getParsed: Cannot parse the signer ($errno)\n$errval");
+	    print STDERR "Error on output of openca-sv.\n$tmp\n";
+	    if (not $self->{ignoreErrorsHash}->{$OpenCA::OpenSSL::errno}) {
+		$self->setstatus($OpenCA::OpenSSL::errno);
+
+		return $self->setError (7921031,
+                           $self->{gettext} ("OpenCA::PKCS7->getParsed: Cannot parse the signer (__ERRNO__). __ERRVAL__",
+                                             "__ERRNO__", $self->errno,
+                                             "__ERRVAL__", $self->errval));
+	    }
 	}
 
 	$self->{parsed}->{SIGNER} = $ret->{0};
@@ -226,17 +303,55 @@ sub getParsed {
 
 	$self->{parsed}->{SIGNER}->{CERTIFICATE} = 
 		$self->{backend}->pkcs7Certs( PKCS7=>$self->{signature});
+	if (not defined $self->{parsed}->{SIGNER}->{CERTIFICATE})
+        {
+		return $self->setError (7921033,
+                           $self->{gettext} ("OpenCA::PKCS7->getParsed: The extraction of the certificates from the signature failed (__ERRNO__). __ERRVAL__",
+                                             "__ERRNO__", $self->{backend}->errno,
+                                             "__ERRVAL__", $self->{backend}->errval));
+	}
 
 	$self->{parsed}->{SIGNATURE} = $self->{signature};
 
 	return $self->{parsed};
 }
 
+# returns the last status set by the module
+# Options:
+# FORMAT => ARRAY:
+#   return arrayref containing an array of all error codes encountered,
+#   individual error codes may appear more than once
+# FORMAT => HASH:  
+#   return hashref containing all error codes encountered (key: errorcode,
+#   value: 1)
+# FORMAT not set or other value: return last error
 sub status {
         my $self = shift;
+	my $keys = { @_ };
 
+	if (exists $keys->{FORMAT} and $keys->{FORMAT} eq "ARRAY") {
+	    return $self->{statusStack};
+	} elsif (exists $keys->{FORMAT} and $keys->{FORMAT} eq "HASH") {
+	    return { map { $_, 1 } @{$self->{statusStack}}};
+	}
+	
         return $self->{status};
 }
+
+
+# add one single error to the error stack
+sub setstatus {
+    my $self = shift;
+    my $err = shift;
+    
+    $self->{status} = $err;
+    if (ref($self->{statusStack}) eq "ARRAY") {
+	push(@{$self->{statusStack}}, $err);
+    } else {
+	carp("self->{statusStack} is not an Arrayref");
+    }
+}
+
 
 sub getSigner {
 	my $self = shift;
@@ -244,7 +359,8 @@ sub getSigner {
 	my $keys = { @_ };
 	my ( $tmp, $ret );
 
-	return $self->setError (7922011, "OpenCA::PKCS7->getSigner: The signature was not parsed.")
+	return $self->setError (7922011,
+                   $self->{gettext} ("OpenCA::PKCS7->getSigner: The signature was not parsed."))
 		if( not $self->{parsed} );
 	return $self->{parsed}->{SIGNER};
 }
@@ -258,28 +374,37 @@ sub verifyChain {
 	#unnecessary because the signature was already loaded
 	#if ( $self->{inFile} ) {
 	#	$tmp=$self->{backend}->verify( SIGNATURE_FILE => $self->{inFile},
+        #                                      OPAQUESIGNATURE => $self->{opaquesig},
 	#				       DATA           => $self->{data},
 	#				       CA_CERT        => $self->{caCert},
 	#				       CA_DIR         => $self->{caDir},
 	#				       VERBOSE        => 1 );
 	#} else {
 		$tmp=$self->{backend}->verify( SIGNATURE => $self->{signature},
+					       OPAQUESIGNATURE => $self->{opaquesig},
 					       DATA      => $self->{data},
 					       CA_CERT   => $self->{caCert},
 					       CA_DIR    => $self->{caDir},
 					       VERBOSE   => 1 );
 	#};
 
-	return $self->setError (7931021, "OpenCA::PKCS7->verifyChain: The crypto-backend fails ".
-				"(".$OpenCA::OpenSSL::errno.")\n".$OpenCA::OpenSSL::errval)
+	return $self->setError (7931021,
+                   $self->{gettext} ("OpenCA::PKCS7->verifyChain: The crypto-backend fails (__ERRNO__). __ERRVAL__",
+				     "__ERRNO__", $OpenCA::OpenSSL::errno,
+                                     "__ERRVAL__", $OpenCA::OpenSSL::errval))
 		if (not $tmp);
 
 	## Returns if signature is not valid (verify returned an error)
-	return $self->setError (7931022, "OpenCA::PKCS7->verifyChain: The crypto-backend fails.")
+	return $self->setError (7931022,
+                   $self->{gettext} ("OpenCA::PKCS7->verifyChain: The crypto-backend fails."))
 		if( $? != 0 );
 
 	if ( not $ret = $self->parseDepth( DEPTH=>"0", DATA=>$tmp ) ) {
-		return $self->setError (7931031, "OpenCA::PKCS7->verifyChain: Cannot parse the signer ($errno)\n$errval");
+		print STDERR "Error on output of openca-sv.\n$tmp\n";
+		return $self->setError (7931031,
+                           $self->{gettext} ("OpenCA::PKCS7->verifyChain: Cannot parse the signer (__ERRNO__). __ERRVAL__",
+                                             "__ERRNO__", $self->errno,
+                                             "__ERRVAL__", $self->errval));
 	}
 
 	return $ret;
@@ -298,33 +423,57 @@ sub parseDepth {
 	my ( $serial, $dn, $email, $cn, @ou, $o, $c );
 	my ( $currentDepth, $subject, $tmp, $line, $ret );
 	
-	return $self->setError (7932011, "OpenCA::PKCS7->parseDepth: No data specified.")
+	return $self->setError (7932011,
+                   $self->{gettext} ("OpenCA::PKCS7->parseDepth: No data specified."))
 		if (not $data);
 
 	my @lines = split ( /(\n|\r)/ , $data );
 
 	while( $line = shift @lines ) {
 
-		if ($line =~ /^\s*error:20:/i) {
-			$self->setError (7932021, "OpenCA::PKCS7->parseDepth: The chain is not complete.");
-			$self->{status} = 20;
-		} elsif ($line =~ /^\s*error:18:/i) {
-			if (!$self->{nochain}) {
-				$self->setError (7932023, "OpenCA::PKCS7->parseDepth: Selfsigned certificate at depth 0.");
-				$self->{status} = 18;
-			}
-		} elsif ($line =~ /^\s*error:/i) {
-			$self->setError (7932039, "OpenCA::PKCS7->parseDepth: ".
-					"There is a problem with the verification of the chain ($line).");
-			($self->{status}) = ( $line =~ /^\s*error:([^:]*):/ );
+		print "OpenCA::PKCS7->parseDepth: line: $line<br>\n"
+			if ($self->{DEBUG});
+		if ($line =~ /^\s*error:20:/i and 
+		    not $self->{ignoreErrorsHash}->{20}) {
+			$self->setError (7932021,
+                            $self->{gettext} ("OpenCA::PKCS7->parseDepth: The chain is not complete."));
+			$self->setstatus(20);
+		} elsif ($line =~ /^\s*error:18:/i and
+		    not $self->{ignoreErrorsHash}->{18}) {
+		        $self->setError (7932023,
+					 $self->{gettext} ("OpenCA::PKCS7->parseDepth: Selfsigned certificate at depth 0."));
+			$self->setstatus(18);
+		} elsif ($line =~ /^\s*error:26:/i and
+		    not $self->{ignoreErrorsHash}->{26}) {
+		        ## OpenCA uses CA certs to sign the role
+		        $self->setError (7932025,
+					 $self->{gettext} ("OpenCA::PKCS7->parseDepth: One of the certificates was used for a not allowed operation. Usually a CA certificate signed data or a normal certificate acts as a CA. (__ERRVAL__)",
+							   "__ERRVAL__", $line));
+			$self->setstatus(26);
+		} elsif ($line =~ /^\s*error:([^:]*):/i and
+		    not $self->{ignoreErrorsHash}->{$1}) {
+			$self->setError (7932039,
+                            $self->{gettext} ("OpenCA::PKCS7->parseDepth: There is a problem with the verification of the chain. (__ERRVAL__)",
+                                              "__ERRVAL__", $line));
+			$self->setstatus($1);
 		}
 
-		next if( $line != /^depth/i );
+		next if( $line !~ /^depth/i );
 
 		( $currentDepth, $serial, $dn ) =
-			( $line =~ /depth:([\d]+) serial:([a-f\d]+) subject:(.*)/ );
-		$ret->{$currentDepth}->{SERIAL} = hex ($serial) ;
+			( $line =~ /depth:([\d]+) serial:([a-fA-F\d]+) subject:(.*)/ );
+		use Math::BigInt;
+		my $serial_obj = Math::BigInt->new ('0x'.$serial);
+		$ret->{$currentDepth}->{SERIAL} = $serial_obj->bstr();
 		$ret->{$currentDepth}->{DN} = $dn;
+		if ($self->{DEBUG})
+		{
+			print "OpenCA::PKCS7->parseDepth: depth: $currentDepth<br>\n";
+			print "OpenCA::PKCS7->parseDepth: serial:".
+			      $ret->{$currentDepth}->{SERIAL}."<br>\n";
+			print "OpenCA::PKCS7->parseDepth: dn:".
+			      $ret->{$currentDepth}->{DN}."<br>\n";
+		}
 
 		## Split the Subject into separate fields
 		@dnList = split( /[\,\/]+/, $dn );
@@ -337,7 +486,8 @@ sub parseDepth {
 		my $x500_dn = X500::DN->ParseRFC2253 ($dn);
 		if (not $x500_dn) {
         		print "OpenCA::PKCS7->parseDepth: X500::DN failed<br>\n" if ($self->{DEBUG});
-			return $self->setError (7932081, "OpenCA::PKCS7->parseDepth: X500::DN failed.");
+			return $self->setError (7932081,
+                                   $self->{gettext} ("OpenCA::PKCS7->parseDepth: X500::DN failed."));
 			return undef;
 		}
 		my $rdn;
@@ -358,7 +508,8 @@ sub parseDepth {
 sub getSignature {
 	my $self = shift;
 
-	return $self->setError (7923011, "OpenCA::PKCS7->getSignature: There is no signature present.")
+	return $self->setError (7923011,
+                   $self->{gettext} ("OpenCA::PKCS7->getSignature: There is no signature present."))
 		if( not $self->{signature} );
 	return $self->{signature};
 }

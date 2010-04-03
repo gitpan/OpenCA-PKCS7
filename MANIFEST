@@ -11,3 +11,4 @@ test/cacert.pem
 test/chain/6b950e78.0
 test/chain/Makefile
 test/chain/cacert.crt
+META.yml                                 Module meta-data (added by MakeMaker)

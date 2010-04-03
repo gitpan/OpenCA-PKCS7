@@ -17,11 +17,12 @@ $openssl->setParams ( CONFIG=>"/usr/ssl/openssl.cnf",
 
 ## $openssl->setParams ( STDERR => "/dev/null" );
 
-my $signature = new OpenCA::PKCS7( SHELL=>$openssl,
-				   INFILE=>"${baseName}.sig",
-				   DATAFILE=>"$baseName",
+my $signature = new OpenCA::PKCS7( SHELL    => $openssl,
+                                   GETTEXT  => \&gettext,
+				   INFILE   => "${baseName}.sig",
+				   DATAFILE => "$baseName",
 				   ## CA_CERT=>"cacert.pem",
-				   CA_DIR=>$caDir);
+				   CA_DIR   => $caDir);
 
 if ( not $signature ) {
 	print "Error\n";
@@ -45,6 +46,11 @@ foreach $level ( keys %$info ) {
 	print "    C-Name: " . $info->{$level}->{CN} . "\n";
 	print "\n";
 };
+
+sub gettext
+{
+    return $_[0];
+}
 
 exit 0; 
 
